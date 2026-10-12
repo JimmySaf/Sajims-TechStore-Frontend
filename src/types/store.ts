@@ -36,8 +36,10 @@ export type AuthUser = {
 
 export type Order = {
   id: number | string;
+  order_number?: string;
   status: string;
   payment_status?: string;
+  payment_method?: string;
   total?: number | string;
   total_amount?: number | string;
   created_at?: string;
