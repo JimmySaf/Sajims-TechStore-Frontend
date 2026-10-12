@@ -1,5 +1,10 @@
-
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ArrowRight,
   CheckCircle2,
@@ -20,6 +25,7 @@ import { api, getAuthToken } from "./lib/api";
 import { loadCart, saveCart } from "./lib/cartStorage";
 import { authService } from "./services/auth";
 import type { AuthUser } from "./types/store";
+import { shopService } from "./services/shop";
 
 type Product = {
   id: string | number;
@@ -33,6 +39,26 @@ type Product = {
   description?: string;
   rating: number;
   reviews: number;
+};
+
+type PaymentMethod = "MPESA" | "CARD" | "CASH" | "BANK_TRANSFER";
+
+type CheckoutForm = {
+  name: string;
+  phone: string;
+  address: string;
+  city: string;
+  notes: string;
+  paymentMethod: PaymentMethod;
+};
+
+const emptyCheckoutForm: CheckoutForm = {
+  name: "",
+  phone: "",
+  address: "",
+  city: "",
+  notes: "",
+  paymentMethod: "CASH",
 };
 
 const sampleProducts: Product[] = [
@@ -255,12 +281,8 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [checkoutBusy, setCheckoutBusy] = useState(false);
-
-  const [checkoutForm, setCheckoutForm] = useState({
-    phone: "",
-    address: "",
-    notes: "",
-  });
+  const [checkoutForm, setCheckoutForm] =
+    useState<CheckoutForm>(emptyCheckoutForm);
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
@@ -351,6 +373,15 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  // Pre-fill the delivery name once the user is signed in.
+  useEffect(() => {
+    if (currentUser?.name) {
+      setCheckoutForm((previous) =>
+        previous.name ? previous : { ...previous, name: currentUser.name },
+      );
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (!notice) return;
@@ -459,6 +490,21 @@ function App() {
     );
   }
 
+  function updateCheckoutField<K extends keyof CheckoutForm>(
+    field: K,
+    value: CheckoutForm[K],
+  ) {
+    setCheckoutForm((previous) => ({ ...previous, [field]: value }));
+  }
+
+  function clearAllFilters() {
+    setSearchInput("");
+    setSearchTerm("");
+    setActiveCategory("All");
+    setSelectedBrand("All brands");
+    setSelectedPrice("Any price");
+  }
+
   async function handleSignOut() {
     try {
       await authService.logout();
@@ -474,13 +520,13 @@ function App() {
     }
   }
 
-  async function handleCheckout(event: React.FormEvent<HTMLFormElement>) {
+  async function handleCheckout(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!currentUser) {
       setCartOpen(false);
       setAuthOpen(true);
-      setNotice("Sign in before proceeding to checkout.");
+      setNotice("Please sign in before checking out.");
       return;
     }
 
@@ -489,18 +535,73 @@ function App() {
       return;
     }
 
+    if (usingSampleProducts) {
+      setNotice(
+        "Checkout is unavailable while preview products are showing. Connect the API first.",
+      );
+      return;
+    }
+
+    if (!checkoutForm.name.trim() || !checkoutForm.city.trim()) {
+      setNotice("Enter the delivery name and town or city.");
+      return;
+    }
+
     setCheckoutBusy(true);
 
     try {
-      // The checkout payload must match the validation rules in Laravel.
-      // Do not create an order until the customer's cart is synchronised.
+      // Replace the server cart with the current local cart so repeated
+      // checkout attempts do not add the same products twice.
+      await shopService.clearServerCart();
+
+      await shopService.syncCart(
+        Object.entries(cart)
+          .filter(([, quantity]) => quantity > 0)
+          .map(([productId, quantity]) => ({
+            productId,
+            quantity,
+          })),
+      );
+
+      const order = await shopService.checkout({
+        shipping_name: checkoutForm.name.trim(),
+        shipping_phone: checkoutForm.phone.trim(),
+        shipping_address: checkoutForm.address.trim(),
+        shipping_city: checkoutForm.city.trim(),
+        shipping_notes: checkoutForm.notes.trim() || undefined,
+        payment_method: checkoutForm.paymentMethod,
+      });
+
+      setCart({});
+      setCartOpen(false);
+
+      setCheckoutForm({
+        ...emptyCheckoutForm,
+        name: currentUser.name,
+      });
+
       setNotice(
-        "Checkout integration needs verification against your Laravel checkout controller.",
+        `Order ${order.order_number ?? `#${order.id}`} placed successfully! Status: ${order.status}.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Checkout failed. Please review your cart and try again.",
       );
     } finally {
       setCheckoutBusy(false);
     }
   }
+
+  const navItems = ["Shop", "Laptops", "Displays", "Storage"];
+
+  function navCategory(item: string) {
+    return item === "Shop" ? "All" : item === "Displays" ? "Monitors" : item;
+  }
+
+  const inputClass =
+    "h-11 w-full rounded-xl border border-[#e4e1d8] bg-white px-3 text-sm outline-none focus:border-[#086b59]";
 
   return (
     <div className="min-h-screen bg-[#f5f3eb] text-[#202923]">
@@ -516,25 +617,17 @@ function App() {
           </a>
 
           <nav className="hidden items-center gap-8 md:flex">
-            {["Shop", "Laptops", "Displays", "Storage"].map((item) => (
+            {navItems.map((item) => (
               <button
                 key={item}
                 onClick={() => {
-                  setActiveCategory(
-                    item === "Shop"
-                      ? "All"
-                      : item === "Displays"
-                        ? "Monitors"
-                        : item,
-                  );
+                  setActiveCategory(navCategory(item));
                   document
                     .getElementById("catalog")
                     ?.scrollIntoView({ behavior: "smooth" });
                 }}
                 className={`border-b-2 py-6 text-sm transition ${
-                  (item === "Shop" && activeCategory === "All") ||
-                  activeCategory === item ||
-                  (item === "Displays" && activeCategory === "Monitors")
+                  activeCategory === navCategory(item)
                     ? "border-[#086b59] font-semibold text-[#086b59]"
                     : "border-transparent text-[#525b54] hover:text-[#086b59]"
                 }`}
@@ -602,17 +695,11 @@ function App() {
 
         {mobileMenuOpen && (
           <nav className="border-t border-[#e8e5dc] bg-[#fffefa] px-5 py-4 md:hidden">
-            {["Shop", "Laptops", "Displays", "Storage"].map((item) => (
+            {navItems.map((item) => (
               <button
                 key={item}
                 onClick={() => {
-                  setActiveCategory(
-                    item === "Shop"
-                      ? "All"
-                      : item === "Displays"
-                        ? "Monitors"
-                        : item,
-                  );
+                  setActiveCategory(navCategory(item));
                   setMobileMenuOpen(false);
                   document
                     .getElementById("catalog")
@@ -651,7 +738,10 @@ function App() {
         )}
       </header>
 
-      <main id="catalog" className="mx-auto max-w-[1600px] px-5 py-8 sm:px-7 sm:py-10 lg:px-10">
+      <main
+        id="catalog"
+        className="mx-auto max-w-[1600px] px-5 py-8 sm:px-7 sm:py-10 lg:px-10"
+      >
         <section className="mb-6">
           <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-[#737c73]">
             Catalog
@@ -779,13 +869,7 @@ function App() {
             selectedBrand !== "All brands" ||
             selectedPrice !== "Any price") && (
             <button
-              onClick={() => {
-                setSearchInput("");
-                setSearchTerm("");
-                setActiveCategory("All");
-                setSelectedBrand("All brands");
-                setSelectedPrice("Any price");
-              }}
+              onClick={clearAllFilters}
               className="text-sm font-medium text-[#086b59] hover:underline"
             >
               Clear filters
@@ -909,13 +993,7 @@ function App() {
               Try a different search or remove some filters.
             </p>
             <button
-              onClick={() => {
-                setSearchInput("");
-                setSearchTerm("");
-                setActiveCategory("All");
-                setSelectedBrand("All brands");
-                setSelectedPrice("Any price");
-              }}
+              onClick={clearAllFilters}
               className="mt-5 rounded-xl bg-[#086b59] px-5 py-3 text-sm font-semibold text-white hover:bg-[#075747]"
             >
               Clear all filters
@@ -1076,7 +1154,7 @@ function App() {
             </div>
 
             {cartProducts.length > 0 && (
-              <div className="border-t border-[#e8e5dc] p-5">
+              <div className="max-h-[70vh] overflow-y-auto border-t border-[#e8e5dc] p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <span className="text-sm text-[#737c73]">Subtotal</span>
                   <span className="text-xl font-bold text-[#086b59]">
@@ -1092,19 +1170,33 @@ function App() {
                 <form onSubmit={handleCheckout} className="space-y-3">
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-[#525b54]">
+                      Delivery name
+                    </span>
+                    <input
+                      required
+                      maxLength={255}
+                      value={checkoutForm.name}
+                      onChange={(event) =>
+                        updateCheckoutField("name", event.target.value)
+                      }
+                      placeholder="Full name for delivery"
+                      className={inputClass}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-[#525b54]">
                       Phone number
                     </span>
                     <input
                       required
+                      maxLength={30}
                       value={checkoutForm.phone}
                       onChange={(event) =>
-                        setCheckoutForm((previous) => ({
-                          ...previous,
-                          phone: event.target.value,
-                        }))
+                        updateCheckoutField("phone", event.target.value)
                       }
                       placeholder="e.g. 07xx xxx xxx"
-                      className="h-11 w-full rounded-xl border border-[#e4e1d8] bg-white px-3 text-sm outline-none focus:border-[#086b59]"
+                      className={inputClass}
                     />
                   </label>
 
@@ -1114,16 +1206,52 @@ function App() {
                     </span>
                     <input
                       required
+                      maxLength={255}
                       value={checkoutForm.address}
                       onChange={(event) =>
-                        setCheckoutForm((previous) => ({
-                          ...previous,
-                          address: event.target.value,
-                        }))
+                        updateCheckoutField("address", event.target.value)
                       }
-                      placeholder="Town, estate, and delivery details"
-                      className="h-11 w-full rounded-xl border border-[#e4e1d8] bg-white px-3 text-sm outline-none focus:border-[#086b59]"
+                      placeholder="Estate, street, or delivery location"
+                      className={inputClass}
                     />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-[#525b54]">
+                      Town / City
+                    </span>
+                    <input
+                      required
+                      maxLength={100}
+                      value={checkoutForm.city}
+                      onChange={(event) =>
+                        updateCheckoutField("city", event.target.value)
+                      }
+                      placeholder="e.g. Nairobi, Kilifi, Mombasa"
+                      className={inputClass}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-[#525b54]">
+                      Payment method
+                    </span>
+                    <select
+                      required
+                      value={checkoutForm.paymentMethod}
+                      onChange={(event) =>
+                        updateCheckoutField(
+                          "paymentMethod",
+                          event.target.value as PaymentMethod,
+                        )
+                      }
+                      className={inputClass}
+                    >
+                      <option value="CASH">Cash</option>
+                      <option value="MPESA">M-Pesa</option>
+                      <option value="CARD">Card</option>
+                      <option value="BANK_TRANSFER">Bank transfer</option>
+                    </select>
                   </label>
 
                   <label className="block">
@@ -1131,12 +1259,10 @@ function App() {
                       Order notes (optional)
                     </span>
                     <textarea
+                      maxLength={1000}
                       value={checkoutForm.notes}
                       onChange={(event) =>
-                        setCheckoutForm((previous) => ({
-                          ...previous,
-                          notes: event.target.value,
-                        }))
+                        updateCheckoutField("notes", event.target.value)
                       }
                       rows={2}
                       placeholder="Any delivery instructions"
@@ -1152,7 +1278,7 @@ function App() {
                     {checkoutBusy && (
                       <LoaderCircle size={17} className="animate-spin" />
                     )}
-                    {currentUser ? "Continue to Checkout" : "Sign In to Checkout"}
+                    {currentUser ? "Place Order" : "Sign In to Checkout"}
                   </button>
                 </form>
               </div>
