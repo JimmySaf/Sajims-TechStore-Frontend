@@ -238,7 +238,7 @@ export default function AuthModal({
           <button
             type="submit"
             disabled={busy}
-            className="flex h-12 w-full items-center justify-center rounded-xl bg-[#086b59] px-4 text-sm font-semibold text-white transition hover:bg-[#075747] disabled:opacity-60"
+           className="flex h-12 w-full items-center justify-center rounded-xl bg-[#086b59] px-4 text-sm font-semibold text-white transition hover:bg-[#075747] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy
               ? "Please wait..."
