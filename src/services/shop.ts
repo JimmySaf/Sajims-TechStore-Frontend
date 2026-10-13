@@ -88,6 +88,40 @@ async function getList<T>(endpoint: string): Promise<T[]> {
   return [];
 }
 
+function extractOrders(response: unknown): Order[] {
+  let result = response as Record<string, unknown> | Order[];
+
+  // Handle Laravel paginator responses and wrapped API responses.
+  for (let i = 0; i < 4; i++) {
+    if (Array.isArray(result)) {
+      return result as Order[];
+    }
+
+    if (!result || typeof result !== "object") {
+      return [];
+    }
+
+    const object = result as Record<string, unknown>;
+
+    if (Array.isArray(object.data)) {
+      return object.data as Order[];
+    }
+
+    if (object.data && typeof object.data === "object") {
+      result = object.data as Record<string, unknown>;
+      continue;
+    }
+
+    if (Array.isArray(object.orders)) {
+      return object.orders as Order[];
+    }
+
+    return [];
+  }
+
+  return Array.isArray(result) ? (result as Order[]) : [];
+}
+
 export const shopService = {
   getProducts(): Promise<Product[]> {
     return getList<Product>("products");
@@ -98,7 +132,11 @@ export const shopService = {
   },
 
   async getCart(): Promise<ServerCart> {
-    const response = await api.get<LaravelCartResponse>("cart", true);
+    const response = await api.get<LaravelCartResponse>(
+      "cart",
+      true,
+    );
+
     return response.data.cart;
   },
 
@@ -162,18 +200,8 @@ export const shopService = {
   },
 
   async getOrders(): Promise<Order[]> {
-    const response = await api.get<{
-      success: boolean;
-      data:
-        | Order[]
-        | {
-            data: Order[];
-          };
-    }>("orders", true);
-
-    const result = response.data;
-
-    return Array.isArray(result) ? result : result.data;
+    const response = await api.get<unknown>("orders", true);
+    return extractOrders(response);
   },
 
   async getOrder(orderId: number | string): Promise<unknown> {
@@ -184,11 +212,15 @@ export const shopService = {
     return api.post(`orders/${orderId}/cancel`, {}, true);
   },
 
-  async createPaymentIntent(orderId: number | string): Promise<unknown> {
+  async createPaymentIntent(
+    orderId: number | string,
+  ): Promise<unknown> {
     return api.post(`orders/${orderId}/payment`, {}, true);
   },
 
-  async getPaymentIntent(paymentId: number | string): Promise<unknown> {
+  async getPaymentIntent(
+    paymentId: number | string,
+  ): Promise<unknown> {
     return api.get(`payments/${paymentId}`, true);
   },
 
