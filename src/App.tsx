@@ -8,6 +8,7 @@ import {
 import {
   ArrowRight,
   CheckCircle2,
+  ClipboardList,
   Heart,
   LoaderCircle,
   Menu,
@@ -21,8 +22,10 @@ import {
 } from "lucide-react";
 
 import AuthModal from "./components/AuthModal";
+import OrdersPanel from "./components/OrdersPanel";
 import { api, getAuthToken } from "./lib/api";
 import { loadCart, saveCart } from "./lib/cartStorage";
+import { formatPrice, normaliseOrder, type Order } from "./lib/orders";
 import { authService } from "./services/auth";
 import type { AuthUser } from "./types/store";
 import { shopService } from "./services/shop";
@@ -244,16 +247,6 @@ function normaliseProduct(raw: Record<string, unknown>): Product {
   };
 }
 
-function formatPrice(price: number): string {
-  return new Intl.NumberFormat("en-KE", {
-    style: "currency",
-    currency: "KES",
-    maximumFractionDigits: 0,
-  })
-    .format(price)
-    .replace("KES", "KSh");
-}
-
 function App() {
   const [products, setProducts] = useState<Product[]>(sampleProducts);
   const [categories, setCategories] = useState<string[]>(defaultCategories);
@@ -283,6 +276,13 @@ function App() {
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [checkoutForm, setCheckoutForm] =
     useState<CheckoutForm>(emptyCheckoutForm);
+
+  // Orders state
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState("");
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
@@ -329,6 +329,36 @@ function App() {
       setUsingSampleProducts(true);
     } finally {
       setCatalogLoading(false);
+    }
+  }, []);
+
+  // Loads the signed-in customer's orders from GET /orders.
+  const loadOrders = useCallback(async () => {
+    setOrdersLoading(true);
+    setOrdersError("");
+
+    try {
+            const rawOrders = (await shopService.getOrders()) as unknown as Record<
+        string,
+        unknown
+      >[];
+
+      const loaded = rawOrders.map(normaliseOrder).sort((a, b) => {
+        const first = new Date(a.createdAt).getTime() || 0;
+        const second = new Date(b.createdAt).getTime() || 0;
+        return second - first;
+      });
+
+      setOrders(loaded);
+    } catch (error) {
+      console.error("Unable to load orders:", error);
+      setOrdersError(
+        error instanceof Error
+          ? error.message
+          : "We could not load your orders. Please try again.",
+      );
+    } finally {
+      setOrdersLoading(false);
     }
   }, []);
 
@@ -382,6 +412,13 @@ function App() {
       );
     }
   }, [currentUser]);
+
+  // Refresh orders every time the orders panel is opened.
+  useEffect(() => {
+    if (ordersOpen && currentUser) {
+      void loadOrders();
+    }
+  }, [ordersOpen, currentUser, loadOrders]);
 
   useEffect(() => {
     if (!notice) return;
@@ -505,6 +542,19 @@ function App() {
     setSelectedPrice("Any price");
   }
 
+  function openOrders() {
+    if (!currentUser) {
+      setMobileMenuOpen(false);
+      setAuthOpen(true);
+      setNotice("Please sign in to view your orders.");
+      return;
+    }
+
+    setCartOpen(false);
+    setMobileMenuOpen(false);
+    setOrdersOpen(true);
+  }
+
   async function handleSignOut() {
     try {
       await authService.logout();
@@ -517,6 +567,10 @@ function App() {
       );
     } finally {
       setCurrentUser(null);
+      setOrders([]);
+      setOrdersOpen(false);
+      setOrdersError("");
+      setExpandedOrderId(null);
     }
   }
 
@@ -583,6 +637,9 @@ function App() {
       setNotice(
         `Order ${order.order_number ?? `#${order.id}`} placed successfully! Status: ${order.status}.`,
       );
+
+      // Show the customer their new order straight away.
+      setOrdersOpen(true);
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -649,7 +706,20 @@ function App() {
             </button>
 
             <button
-              onClick={() => setCartOpen(true)}
+              onClick={openOrders}
+              aria-label="My orders"
+              title="My orders"
+              className="flex items-center gap-2 rounded-full px-3 py-2.5 text-sm font-medium text-[#38433c] transition hover:bg-[#eeeee6]"
+            >
+              <ClipboardList size={21} />
+              <span className="hidden lg:inline">My Orders</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setOrdersOpen(false);
+                setCartOpen(true);
+              }}
               aria-label={`Shopping cart with ${cartCount} items`}
               className="relative rounded-full p-2.5 text-[#38433c] transition hover:bg-[#eeeee6]"
             >
@@ -710,6 +780,13 @@ function App() {
                 {item}
               </button>
             ))}
+
+            <button
+              onClick={openOrders}
+              className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-[#086b59] hover:bg-[#f0efe8]"
+            >
+              My Orders
+            </button>
 
             {!currentUser && (
               <button
@@ -1285,6 +1362,18 @@ function App() {
             )}
           </aside>
         </div>
+      )}
+
+      {ordersOpen && (
+        <OrdersPanel
+          orders={orders}
+          loading={ordersLoading}
+          error={ordersError}
+          expandedOrderId={expandedOrderId}
+          onToggle={setExpandedOrderId}
+          onRefresh={() => void loadOrders()}
+          onClose={() => setOrdersOpen(false)}
+        />
       )}
 
       {authOpen && (
