@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 
+import AdminOrdersPanel from "./components/AdminOrdersPanel";
 import AuthModal from "./components/AuthModal";
 import OrdersPanel from "./components/OrdersPanel";
 import { api, getAuthToken } from "./lib/api";
@@ -284,6 +285,10 @@ function App() {
   const [ordersError, setOrdersError] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
+  // Admin state
+  const [adminOpen, setAdminOpen] = useState(false);
+  const isAdmin = currentUser?.role?.toUpperCase() === "ADMIN";
+
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
 
@@ -307,9 +312,17 @@ function App() {
 
       setApiConnected(true);
 
-      if (liveProducts.length > 0) {
+            if (liveProducts.length > 0) {
         setProducts(liveProducts);
         setUsingSampleProducts(false);
+
+        // Drop cart items that are not in the live catalog (e.g. preview items).
+        const liveIds = new Set(liveProducts.map((p) => String(p.id)));
+        setCart((previous) =>
+          Object.fromEntries(
+            Object.entries(previous).filter(([id]) => liveIds.has(id)),
+          ),
+        );
       } else {
         setProducts(sampleProducts);
         setUsingSampleProducts(true);
@@ -332,13 +345,13 @@ function App() {
     }
   }, []);
 
-  // Loads the signed-in customer's orders from GET /orders.
+  // Loads the signed-in customer's orders (authenticated via shopService).
   const loadOrders = useCallback(async () => {
     setOrdersLoading(true);
     setOrdersError("");
 
     try {
-            const rawOrders = (await shopService.getOrders()) as unknown as Record<
+      const rawOrders = (await shopService.getOrders()) as unknown as Record<
         string,
         unknown
       >[];
@@ -361,6 +374,11 @@ function App() {
       setOrdersLoading(false);
     }
   }, []);
+
+  // Open the admin dashboard for admins; close it for everyone else.
+  useEffect(() => {
+    setAdminOpen(isAdmin);
+  }, [isAdmin]);
 
   useEffect(() => {
     void loadCatalog();
@@ -571,6 +589,7 @@ function App() {
       setOrdersOpen(false);
       setOrdersError("");
       setExpandedOrderId(null);
+      setAdminOpen(false);
     }
   }
 
@@ -736,6 +755,16 @@ function App() {
                 <span className="max-w-28 truncate text-sm font-medium">
                   {currentUser.name}
                 </span>
+
+                {isAdmin && (
+                  <button
+                    onClick={() => setAdminOpen(true)}
+                    className="rounded-xl bg-[#086b59] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#075747]"
+                  >
+                    Admin Dashboard
+                  </button>
+                )}
+
                 <button
                   onClick={() => void handleSignOut()}
                   className="rounded-xl border border-[#e7e5dd] bg-white px-4 py-2.5 text-sm font-medium hover:border-[#086b59] hover:text-[#086b59]"
@@ -797,6 +826,18 @@ function App() {
                 className="mt-2 w-full rounded-xl bg-[#086b59] px-4 py-3 text-sm font-semibold text-white"
               >
                 Sign In / Register
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setAdminOpen(true);
+                }}
+                className="mt-2 w-full rounded-xl bg-[#086b59] px-4 py-3 text-sm font-semibold text-white"
+              >
+                Admin Dashboard
               </button>
             )}
 
@@ -1384,6 +1425,27 @@ function App() {
             setNotice(`Welcome, ${user.name}!`);
           }}
         />
+      )}
+
+      {adminOpen && isAdmin && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto bg-[#f5f3eb]">
+          <div className="sticky top-0 z-10 border-b border-[#e8e5dc] bg-[#fffefa] px-5 py-3">
+            <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
+              <span className="font-semibold text-[#202923]">
+                Sajims TechStore — Admin
+              </span>
+
+              <button
+                onClick={() => setAdminOpen(false)}
+                className="rounded-xl bg-[#086b59] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#075747]"
+              >
+                Back to Shop
+              </button>
+            </div>
+          </div>
+
+          <AdminOrdersPanel />
+        </div>
       )}
     </div>
   );
